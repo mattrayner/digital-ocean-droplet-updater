@@ -1,6 +1,7 @@
 require 'droplet_kit'
 require 'pry'
 require 'net/ssh'
+require 'filesize'
 
 class DropletUpdater
   def initialize(username:, password:, token:)
@@ -12,25 +13,50 @@ class DropletUpdater
   def update
     droplets = digital_ocean_droplets
 
-    puts "Got #{droplets.count} droplets"
+    puts "Droplets: #{droplets.count}"
 
-    binding.pry
+    # binding.pry
+
+    responses = []
 
     droplets.each do |droplet|
-      puts "#{droplet.public_ip}\t\t#{droplet.name}"
+      puts "Processing: #{droplet.name} - #{droplet.public_ip}"
 
       begin
         Net::SSH.start(droplet.public_ip, @username,
                        password: @password,
                        auth_methods: [ 'password' ],
                        number_of_password_prompts: 0) do |ssh|
-          output = ssh.exec!('hostname')
-          puts output
+          output = ssh.exec!('if [ -d "web" ]; then cd web && du -s *; fi;')
+
+          sizes = output.split(/\n/).map{ |line| { site: line.split(/\t/)[1], size: line.split(/\t/)[0] } unless line.include? 'du: cannot access' }.compact
+
+          data_object = {
+              droplet: {
+                  ip: droplet.public_ip,
+                  name: droplet.name
+              },
+              output: output,
+              sizes: sizes
+          }
+
+          responses << data_object
+
         end
       rescue
-        puts 'FAILED'
+        puts 'Unable to process'
       end
-      puts '=========='
+      puts "Done\n--------"
+    end
+
+    puts '========='
+
+    responses.each do |data|
+      data[:sizes].each do |size|
+        filesize = Filesize.from("#{size[:size]} KB").pretty
+
+        puts "#{size[:site]}\t#{filesize}"
+      end
     end
   end
 
@@ -45,9 +71,3 @@ class DropletUpdater
     @droplets = @droplets || client.droplets.all
   end
 end
-
-puts 'Creating updater'
-droplet_updater = DropletUpdater.new(username: '***', password: '***', token: '***')
-puts 'Calling update'
-droplet_updater.update
-puts 'Done'
